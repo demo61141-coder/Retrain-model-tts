@@ -167,7 +167,8 @@ fun ReporterHasanTtsApp(
                         progressStatusText = uiState.progressStatusText,
                         onBackClick = studioViewModel::navigateBack,
                         onOpenPhoneTtsSettings = studioViewModel::openSystemTtsSettings,
-                        onDownloadOfflineModel = studioViewModel::downloadOfflineModelOnly
+                        onTestSystemTts = studioViewModel::testSystemTtsEngine,
+                        onDownloadOfflineModel = studioViewModel::prepareOfflineModelFiles
                     )
                 }
             }

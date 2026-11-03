@@ -5,10 +5,15 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import java.io.BufferedOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -21,12 +26,13 @@ import okhttp3.Request
 data class ModelFileStatus(
     val isModelReady: Boolean,
     val isTokensReady: Boolean,
+    val isBundledInApkAssets: Boolean,
     val modelActualBytes: Long,
     val tokensActualBytes: Long,
     val isEngineLoadedInMemory: Boolean
 ) {
     val isFullyReadyOffline: Boolean
-        get() = isModelReady && isTokensReady
+        get() = (isModelReady && isTokensReady) || isBundledInApkAssets
 }
 
 data class SynthesisSuccess(
@@ -65,6 +71,17 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
         const val CPU_THREADS = 2
 
         private const val MAX_DOWNLOAD_RETRIES = 5
+
+        @Volatile
+        private var INSTANCE: SherpaOfflineTtsEngine? = null
+
+        fun getInstance(context: Context): SherpaOfflineTtsEngine {
+            return INSTANCE ?: synchronized(this) {
+                val inst = INSTANCE ?: SherpaOfflineTtsEngine(context.applicationContext)
+                INSTANCE = inst
+                inst
+            }
+        }
     }
 
     private val engineMutex = Mutex()
@@ -84,8 +101,13 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
     fun getModelFile(): File = File(appContext.filesDir, MODEL_FILENAME)
     fun getTokensFile(): File = File(appContext.filesDir, TOKENS_FILENAME)
 
+    private fun hasBundledAsset(assetName: String): Boolean {
+        return runCatching {
+            appContext.assets.open(assetName).use { true }
+        }.getOrDefault(false)
+    }
+
     fun queryModelStatus(): ModelFileStatus {
-        // Clean up any legacy broken model.onnx if present from older versions
         val oldBrokenModel = File(appContext.filesDir, "model.onnx")
         if (oldBrokenModel.exists()) {
             runCatching { oldBrokenModel.delete() }
@@ -95,20 +117,37 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
         val tokensFile = getTokensFile()
         val modelBytes = if (modelFile.exists()) modelFile.length() else 0L
         val tokensBytes = if (tokensFile.exists()) tokensFile.length() else 0L
+        val bundledInAssets = hasBundledAsset(MODEL_FILENAME) && hasBundledAsset(TOKENS_FILENAME)
+
         return ModelFileStatus(
             isModelReady = modelBytes == EXPECTED_MODEL_BYTES,
             isTokensReady = tokensBytes == EXPECTED_TOKENS_BYTES,
-            modelActualBytes = modelBytes,
-            tokensActualBytes = tokensBytes,
+            isBundledInApkAssets = bundledInAssets,
+            modelActualBytes = if (modelBytes == EXPECTED_MODEL_BYTES) {
+                modelBytes
+            } else if (bundledInAssets) {
+                EXPECTED_MODEL_BYTES
+            } else {
+                modelBytes
+            },
+            tokensActualBytes = if (tokensBytes == EXPECTED_TOKENS_BYTES) {
+                tokensBytes
+            } else if (bundledInAssets) {
+                EXPECTED_TOKENS_BYTES
+            } else {
+                tokensBytes
+            },
             isEngineLoadedInMemory = offlineTts != null
         )
     }
 
     /**
      * Ensures tokens_sherpa.txt (567 bytes) and model_fullmeta.onnx (114,188,118 bytes)
-     * are downloaded into filesDir with HTTP Range resume and retry on failure.
+     * are ready in filesDir:
+     * 1. First copies directly from built-in APK assets (100% offline, no internet needed!).
+     * 2. Falls back to HTTP Range resume download only if assets are missing.
      */
-    suspend fun ensureModelFilesDownloaded(
+    suspend fun ensureModelFilesReady(
         onProgress: (percent: Int, statusText: String) -> Unit
     ) = withContext(Dispatchers.IO) {
         engineMutex.withLock {
@@ -121,40 +160,111 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
     ) {
         val tokensFile = getTokensFile()
         if (!tokensFile.exists() || tokensFile.length() != EXPECTED_TOKENS_BYTES) {
-            onProgress(1, "⏳ টোকেন ফাইল ডাউনলোড হচ্ছে (tokens_sherpa.txt - 567 bytes)...")
-            downloadWithRangeResume(
-                url = TOKENS_URL,
-                targetFile = tokensFile,
-                expectedBytes = EXPECTED_TOKENS_BYTES,
-                label = "tokens_sherpa.txt"
-            ) { _, _ -> }
+            if (hasBundledAsset(TOKENS_FILENAME)) {
+                onProgress(2, "⏳ বিল্ট-ইন অফলাইন টোকেন প্রস্তুত করা হচ্ছে...")
+                copyAssetToFile(
+                    assetName = TOKENS_FILENAME,
+                    targetFile = tokensFile,
+                    expectedBytes = EXPECTED_TOKENS_BYTES
+                ) { _, _ -> }
+            } else {
+                onProgress(1, "⏳ টোকেন ফাইল ডাউনলোড হচ্ছে (tokens_sherpa.txt - 567 bytes)...")
+                downloadWithRangeResume(
+                    url = TOKENS_URL,
+                    targetFile = tokensFile,
+                    expectedBytes = EXPECTED_TOKENS_BYTES,
+                    label = "tokens_sherpa.txt"
+                ) { _, _ -> }
+            }
         }
 
         val modelFile = getModelFile()
         if (!modelFile.exists() || modelFile.length() != EXPECTED_MODEL_BYTES) {
-            onProgress(2, "⏳ প্রথমবার ভয়েস মডেল ডাউনলোড হচ্ছে (model_fullmeta.onnx - 108.9 MB)...")
-            downloadWithRangeResume(
-                url = MODEL_URL,
-                targetFile = modelFile,
-                expectedBytes = EXPECTED_MODEL_BYTES,
-                label = "model_fullmeta.onnx"
-            ) { downloaded, total ->
-                val pct = ((downloaded.toDouble() / total.toDouble()) * 100.0)
-                    .roundToInt()
-                    .coerceIn(1, 99)
-                val mbDone = downloaded / (1024f * 1024f)
-                val mbTotal = total / (1024f * 1024f)
-                onProgress(
-                    pct,
-                    "⏳ প্রথমবার ভয়েস মডেল ডাউনলোড হচ্ছে: %.1f / %.1f MB (%d%%)".format(
-                        java.util.Locale.US,
-                        mbDone,
-                        mbTotal,
-                        pct
+            if (hasBundledAsset(MODEL_FILENAME)) {
+                onProgress(5, "⏳ অ্যাপের ভেতরের বিল্ট-ইন অফলাইন ভয়েস মডেল লোড হচ্ছে...")
+                copyAssetToFile(
+                    assetName = MODEL_FILENAME,
+                    targetFile = modelFile,
+                    expectedBytes = EXPECTED_MODEL_BYTES
+                ) { copied, total ->
+                    val pct = ((copied.toDouble() / total.toDouble()) * 100.0)
+                        .roundToInt()
+                        .coerceIn(1, 99)
+                    onProgress(
+                        pct,
+                        "⏳ বিল্ট-ইন অফলাইন ভয়েস মডেল প্রস্তুত হচ্ছে ($pct%)..."
                     )
-                )
+                }
+            } else {
+                onProgress(2, "⏳ প্রথমবার ভয়েস মডেল ডাউনলোড হচ্ছে (model_fullmeta.onnx - 108.9 MB)...")
+                downloadWithRangeResume(
+                    url = MODEL_URL,
+                    targetFile = modelFile,
+                    expectedBytes = EXPECTED_MODEL_BYTES,
+                    label = "model_fullmeta.onnx"
+                ) { downloaded, total ->
+                    val pct = ((downloaded.toDouble() / total.toDouble()) * 100.0)
+                        .roundToInt()
+                        .coerceIn(1, 99)
+                    val mbDone = downloaded / (1024f * 1024f)
+                    val mbTotal = total / (1024f * 1024f)
+                    onProgress(
+                        pct,
+                        "⏳ প্রথমবার ভয়েস মডেল ডাউনলোড হচ্ছে: %.1f / %.1f MB (%d%%)".format(
+                            java.util.Locale.US,
+                            mbDone,
+                            mbTotal,
+                            pct
+                        )
+                    )
+                }
             }
         }
+    }
+
+    private fun copyAssetToFile(
+        assetName: String,
+        targetFile: File,
+        expectedBytes: Long,
+        onBytesProgress: (copiedBytes: Long, expectedBytes: Long) -> Unit
+    ) {
+        targetFile.parentFile?.mkdirs()
+        val tempFile = File(targetFile.parentFile, "${targetFile.name}.asset_tmp")
+        if (tempFile.exists()) tempFile.delete()
+
+        appContext.assets.open(assetName).use { input ->
+            BufferedOutputStream(FileOutputStream(tempFile), 256 * 1024).use { output ->
+                val buffer = ByteArray(256 * 1024)
+                var totalCopied = 0L
+                var lastPct = -1
+                var read: Int
+                while (input.read(buffer).also { read = it } != -1) {
+                    output.write(buffer, 0, read)
+                    totalCopied += read
+                    val pct = ((totalCopied * 100L) / max(1L, expectedBytes)).toInt()
+                    if (pct != lastPct) {
+                        lastPct = pct
+                        onBytesProgress(totalCopied, expectedBytes)
+                    }
+                }
+                output.flush()
+            }
+        }
+
+        if (tempFile.length() != expectedBytes) {
+            val actual = tempFile.length()
+            tempFile.delete()
+            throw BengaliTtsException(
+                "বিল্ট-ইন অ্যাসেট ফাইলের সাইজ মেলেনি ($assetName): $actual বাইট (প্রয়োজন $expectedBytes বাইট)।"
+            )
+        }
+
+        if (targetFile.exists()) targetFile.delete()
+        if (!tempFile.renameTo(targetFile)) {
+            tempFile.copyTo(targetFile, overwrite = true)
+            tempFile.delete()
+        }
+        onBytesProgress(expectedBytes, expectedBytes)
     }
 
     private suspend fun downloadWithRangeResume(
@@ -166,7 +276,6 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
     ) {
         targetFile.parentFile?.mkdirs()
 
-        // If targetFile already has the exact expected size, we're done
         if (targetFile.exists() && targetFile.length() == expectedBytes) {
             onBytesProgress(expectedBytes, expectedBytes)
             return
@@ -202,7 +311,6 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
 
                 okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
                     if (!response.isSuccessful && response.code != 206) {
-                        // If 416 Range Not Satisfiable, reset part file and retry
                         if (response.code == 416) {
                             partFile.delete()
                         }
@@ -245,7 +353,6 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
 
                 val finalLength = partFile.length()
                 if (finalLength != expectedBytes) {
-                    // If oversized, delete partFile so next retry starts clean
                     if (finalLength > expectedBytes) {
                         partFile.delete()
                     }
@@ -281,13 +388,13 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
 
         val reason = lastError?.localizedMessage ?: "অজানা নেটওয়ার্ক ত্রুটি"
         throw BengaliTtsException(
-            "ভয়েস মডেল ডাউনলোড করা যায়নি ($label)। অনুগ্রহ করে ইন্টারনেট সংযোগ পরীক্ষা করে আবার Generate চাপুন।\nবিস্তারিত: $reason",
+            "ভয়েস মডেল প্রস্তুত করা যায়নি ($label)।\nবিস্তারিত: $reason",
             lastError
         )
     }
 
     /**
-     * Lazily initializes OfflineTts on the FIRST Generate call only.
+     * Lazily initializes OfflineTts on the first synthesis request.
      * Never called during app startup.
      */
     private fun getOrLoadTtsUnlocked(): OfflineTts {
@@ -347,8 +454,8 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
     }
 
     /**
-     * Performs full offline Bengali speech synthesis:
-     * 1. Downloads model_fullmeta.onnx & tokens_sherpa.txt on first run only if not yet present.
+     * Performs full offline Bengali speech synthesis for the Studio UI:
+     * 1. Extracts built-in model_fullmeta.onnx & tokens_sherpa.txt from APK assets into filesDir on first run.
      * 2. Lazily loads Sherpa-ONNX OfflineTts VITS engine.
      * 3. Splits text using mandatory BengaliTextChunker rules.
      * 4. Synthesizes each chunk and joins them with exact silence pauses (0.40s, 0.30s, 0.20s).
@@ -379,17 +486,22 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 throw BengaliTtsException("টেক্সট প্রসেস করা যায়নি। অনুগ্রহ করে বৈধ বাংলা বাক্য লিখুন।")
             }
 
-            // Step 1: Ensure model_fullmeta.onnx and tokens_sherpa.txt exist in filesDir
-            val currentStatus = queryModelStatus()
-            val needsDownload = !currentStatus.isFullyReadyOffline
-            if (needsDownload) {
+            // Step 1: Ensure model_fullmeta.onnx and tokens_sherpa.txt exist in filesDir (extracted from built-in assets)
+            val modelFile = getModelFile()
+            val tokensFile = getTokensFile()
+            val needsExtraction = !modelFile.exists() ||
+                modelFile.length() != EXPECTED_MODEL_BYTES ||
+                !tokensFile.exists() ||
+                tokensFile.length() != EXPECTED_TOKENS_BYTES
+
+            if (needsExtraction) {
                 ensureFilesUnlocked { dlPct, dlMessage ->
-                    val scaledPct = (dlPct * 0.45f).roundToInt().coerceIn(1, 45)
+                    val scaledPct = (dlPct * 0.30f).roundToInt().coerceIn(1, 30)
                     onProgress(scaledPct, dlMessage)
                 }
             }
 
-            val basePct = if (needsDownload) 45 else 5
+            val basePct = if (needsExtraction) 30 else 5
             onProgress(basePct, "⏳ অফলাইন ভয়েস ইঞ্জিন প্রস্তুত করা হচ্ছে (Sherpa-ONNX VITS)...")
 
             // Step 2: Lazily load OfflineTts
@@ -432,11 +544,10 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                     totalSamples += processedSamples.size
                 }
 
-                // Append silence pause between pieces (or after the piece's punctuation mark)
                 if (index < chunks.lastIndex && chunk.pauseSeconds > 0f) {
                     val silenceCount = chunk.silenceSampleCount(sampleRate)
                     if (silenceCount > 0) {
-                        val silence = FloatArray(silenceCount) // 0.0f silence
+                        val silence = FloatArray(silenceCount)
                         chunkBuffers.add(silence)
                         totalSamples += silence.size
                     }
@@ -488,6 +599,70 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 waveformPeaks = waveformPeaks
             )
         }
+    }
+
+    /**
+     * Streams 16-bit mono 22050 Hz PCM audio chunks directly to Android's System TextToSpeechService
+     * so any app on the phone can speak using Reporter Hasan's voice!
+     */
+    suspend fun synthesizeForSystemTtsService(
+        rawText: String,
+        speed: Float,
+        pitch: Float,
+        isStopped: () -> Boolean,
+        onPcmBytesReady: (ByteArray) -> Boolean
+    ) = withContext(Dispatchers.IO) {
+        engineMutex.withLock {
+            val trimmed = rawText.trim()
+            if (trimmed.isEmpty()) return@withLock
+
+            ensureFilesUnlocked { _, _ -> }
+            val tts = getOrLoadTtsUnlocked()
+            val sampleRate = runCatching { tts.sampleRate() }
+                .getOrDefault(VITS_SAMPLE_RATE)
+                .let { if (it > 0) it else VITS_SAMPLE_RATE }
+
+            val chunks = BengaliTextChunker.chunkText(trimmed)
+            val safeSpeed = speed.coerceIn(0.5f, 2.0f)
+
+            for ((index, chunk) in chunks.withIndex()) {
+                if (isStopped()) break
+
+                val generated = runCatching {
+                    tts.generate(
+                        text = chunk.text,
+                        sid = 0,
+                        speed = safeSpeed
+                    )
+                }.getOrNull() ?: continue
+
+                if (isStopped()) break
+
+                val samples = WavFileWriter.applyPitchIfNeeded(generated.samples, pitch)
+                if (samples.isNotEmpty()) {
+                    val pcmBytes = floatSamplesToPcm16Bytes(samples)
+                    if (!onPcmBytesReady(pcmBytes)) break
+                }
+
+                if (index < chunks.lastIndex && chunk.pauseSeconds > 0f && !isStopped()) {
+                    val silenceSamples = chunk.silenceSampleCount(sampleRate)
+                    if (silenceSamples > 0) {
+                        val silenceBytes = ByteArray(silenceSamples * 2)
+                        if (!onPcmBytesReady(silenceBytes)) break
+                    }
+                }
+            }
+        }
+    }
+
+    private fun floatSamplesToPcm16Bytes(samples: FloatArray): ByteArray {
+        val byteBuffer = ByteBuffer.allocate(samples.size * 2).order(ByteOrder.LITTLE_ENDIAN)
+        for (s in samples) {
+            val clamped = max(-1.0f, min(1.0f, s))
+            val pcm16 = (clamped * 32767.0f).roundToInt().coerceIn(-32768, 32767).toShort()
+            byteBuffer.putShort(pcm16)
+        }
+        return byteBuffer.array()
     }
 
     fun release() {

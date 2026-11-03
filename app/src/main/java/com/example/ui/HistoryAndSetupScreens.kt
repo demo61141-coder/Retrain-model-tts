@@ -82,6 +82,7 @@ fun SystemTtsSetupScreen(
     progressStatusText: String,
     onBackClick: () -> Unit,
     onOpenPhoneTtsSettings: () -> Unit,
+    onTestSystemTts: () -> Unit,
     onDownloadOfflineModel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -171,22 +172,22 @@ fun SystemTtsSetupScreen(
                 SetupStepRow(
                     stepNumber = "Step 1",
                     stepTitle = "Open Phone Settings",
-                    stepSubtitle = "ফোনের মূল Settings অ্যাপে প্রবেশ করুন"
+                    stepSubtitle = "নিচের বাটনে চাপ দিয়ে সরাসরি Text-to-speech সেটিংসে যান"
                 )
                 SetupStepRow(
                     stepNumber = "Step 2",
-                    stepTitle = "Go to Accessibility / System Languages",
-                    stepSubtitle = "System > Languages & input অথবা Accessibility মেনুতে যান"
+                    stepTitle = "Tap 'Preferred engine' (পছন্দের ইঞ্জিন)",
+                    stepSubtitle = "তালিকায় \"Reporter Hasan TTS\" দেখতে পাবেন"
                 )
                 SetupStepRow(
                     stepNumber = "Step 3",
-                    stepTitle = "Select Text-to-Speech Output",
-                    stepSubtitle = "Text-to-speech output অপশনটি নির্বাচন করুন"
+                    stepTitle = "Select \"Reporter Hasan TTS\"",
+                    stepSubtitle = "ডিফল্ট ইঞ্জিন হিসেবে নির্বাচন করুন"
                 )
                 SetupStepRow(
                     stepNumber = "Step 4",
-                    stepTitle = "Choose \"Reporter Hasan TTS\"",
-                    stepSubtitle = "ডিফল্ট ভয়েস ও অফলাইন স্টুডিও হিসেবে ব্যবহার করুন"
+                    stepTitle = "Use in Any Speech / Reader App",
+                    stepSubtitle = "এখন ফোনের যেকোনো স্পিচ বা বুক রিডার অ্যাপে আপনার কণ্ঠে কথা বলবে!"
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -216,6 +217,28 @@ fun SystemTtsSetupScreen(
                     )
                 }
 
+                OutlinedButton(
+                    onClick = onTestSystemTts,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("test_system_tts_button"),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = NeonSkyAccent
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "🔊 সিস্টেম TTS ইঞ্জিন টেস্ট করুন",
+                        color = PureWhiteText,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp
+                    )
+                }
+
                 // Status Bar: Status: 🟢 Ready (Offline Mode Active)
                 Row(
                     modifier = Modifier
@@ -231,27 +254,21 @@ fun SystemTtsSetupScreen(
                         modifier = Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (modelStatus.isFullyReadyOffline) VibrantEmeraldReady else WarningAmber
-                            )
+                            .background(VibrantEmeraldReady)
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = if (modelStatus.isFullyReadyOffline) {
-                            "Status: 🟢 Ready (Offline Mode Active)"
-                        } else {
-                            "Status: 🟡 Ready to Download on First Generate (Offline Mode)"
-                        },
+                        text = "Status: 🟢 Ready (Offline Mode Active • Built-in Model)",
                         fontFamily = JetBrainsMonoFamily,
                         fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp,
+                        fontSize = 12.sp,
                         color = PureWhiteText
                     )
                 }
             }
         }
 
-        // Offline Model Verification & Pre-Download Card (v1.9.4-fixed metadata-fixed retrain model)
+        // Offline Model Verification Card (v1.9.4-fixed metadata-fixed retrain model bundled in APK)
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -266,14 +283,15 @@ fun SystemTtsSetupScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "📦 অফলাইন ভয়েস মডেল (v1.9.4-fixed Retrain)",
+                    text = "📦 বিল্ট-ইন অফলাইন ভয়েস মডেল (v1.9.4-fixed Retrain)",
                     style = MaterialTheme.typography.titleMedium,
                     color = NeonSkyAccent
                 )
 
                 Text(
-                    text = "• Model: filesDir/model_fullmeta.onnx (${modelStatus.modelActualBytes} / ${SherpaOfflineTtsEngine.EXPECTED_MODEL_BYTES} bytes)\n" +
-                        "• Tokens: filesDir/tokens_sherpa.txt (${modelStatus.tokensActualBytes} / ${SherpaOfflineTtsEngine.EXPECTED_TOKENS_BYTES} bytes)\n" +
+                    text = "• Model: model_fullmeta.onnx (${SherpaOfflineTtsEngine.EXPECTED_MODEL_BYTES} bytes — APK-র ভেতরে সংযুক্ত)\n" +
+                        "• Tokens: tokens_sherpa.txt (${SherpaOfflineTtsEngine.EXPECTED_TOKENS_BYTES} bytes — APK-র ভেতরে সংযুক্ত)\n" +
+                        "• System TTS Service: ReporterHasanTtsService (bn-BD, bn-IN, en-US)\n" +
                         "• Engine: sherpa-onnx 2.0.1 VITS (CPU 2 threads, 22050 Hz, noiseScale 0.667, noiseScaleW 0.8, lengthScale 1.0)\n" +
                         "• Security: Room SQLite Local DB + SHA-256 WAV Integrity Check",
                     fontFamily = JetBrainsMonoFamily,
@@ -297,7 +315,7 @@ fun SystemTtsSetupScreen(
                         color = NeonSkyAccent,
                         trackColor = DeepDarkBackground
                     )
-                } else if (!modelStatus.isFullyReadyOffline) {
+                } else if (!modelStatus.isModelReady) {
                     OutlinedButton(
                         onClick = onDownloadOfflineModel,
                         modifier = Modifier
@@ -312,7 +330,7 @@ fun SystemTtsSetupScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "এখনই অফলাইন মডেল ডাউনলোড ও ভেরিফাই করুন (108.9 MB)",
+                            text = "বিল্ট-ইন মডেল মেমোরিতে এক্সট্রাক্ট করে রাখুন",
                             color = PureWhiteText,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp
@@ -331,7 +349,7 @@ fun SystemTtsSetupScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "মডেল ও টোকেন ফাইল শতভাগ ভেরিফাইড — সম্পূর্ণ ইন্টারনেট ছাড়াই চলবে।",
+                            text = "মডেল ও টোকেন অ্যাপের ভেতরেই সংযুক্ত — কোনো ডাউনলোড বা ইন্টারনেট ছাড়াই চলবে।",
                             style = MaterialTheme.typography.bodyMedium,
                             color = VibrantEmeraldReady
                         )

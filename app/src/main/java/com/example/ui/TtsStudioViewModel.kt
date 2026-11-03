@@ -2,6 +2,8 @@ package com.example.ui
 
 import android.app.Application
 import android.media.MediaPlayer
+import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.TtsDatabase
@@ -14,6 +16,7 @@ import com.example.tts.NewsTemplate
 import com.example.tts.NewsTemplates
 import com.example.tts.SherpaOfflineTtsEngine
 import java.io.File
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlinx.coroutines.Job
@@ -53,8 +56,9 @@ data class StudioUiState(
     val modelStatus: ModelFileStatus = ModelFileStatus(
         isModelReady = false,
         isTokensReady = false,
-        modelActualBytes = 0L,
-        tokensActualBytes = 0L,
+        isBundledInApkAssets = true,
+        modelActualBytes = SherpaOfflineTtsEngine.EXPECTED_MODEL_BYTES,
+        tokensActualBytes = SherpaOfflineTtsEngine.EXPECTED_TOKENS_BYTES,
         isEngineLoadedInMemory = false
     ),
     val activeAudioItem: TtsHistoryEntity? = null,
@@ -84,7 +88,7 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
     private val appContext = application.applicationContext
     private val database = TtsDatabase.getInstance(appContext)
     private val repository = TtsRepository(database.ttsHistoryDao())
-    private val ttsEngine = SherpaOfflineTtsEngine(appContext)
+    private val ttsEngine = SherpaOfflineTtsEngine.getInstance(appContext)
 
     private val _uiState = MutableStateFlow(
         StudioUiState(
@@ -102,6 +106,7 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     private var mediaPlayer: MediaPlayer? = null
     private var playbackTickerJob: Job? = null
+    private var systemTtsTester: TextToSpeech? = null
 
     fun refreshModelStatus() {
         _uiState.update { it.copy(modelStatus = ttsEngine.queryModelStatus()) }
@@ -192,7 +197,7 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
 
     /**
      * Triggered when user presses [ GENERATE VOICE 🔊 ].
-     * Validates word count, lazily downloads & loads model_fullmeta.onnx + tokens_sherpa.txt on first run,
+     * Uses the built-in offline model_fullmeta.onnx + tokens_sherpa.txt from APK assets (no internet download needed),
      * chunks text per exact rules, synthesizes WAV, saves record to Room local DB, and opens Audio Player.
      */
     fun generateVoice() {
@@ -305,10 +310,9 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
     }
 
     /**
-     * Allows user to pre-download model_fullmeta.onnx (114,188,118 bytes) and tokens_sherpa.txt (567 bytes)
-     * from the System TTS Setup screen so offline mode is ready beforehand.
+     * Prepares/extracts the built-in offline model into filesDir immediately.
      */
-    fun downloadOfflineModelOnly() {
+    fun prepareOfflineModelFiles() {
         val currentState = _uiState.value
         if (currentState.isGenerating) return
 
@@ -317,11 +321,11 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
                 it.copy(
                     isGenerating = true,
                     progressPercent = 1,
-                    progressStatusText = "⏳ অফলাইন ভয়েস মডেল ডাউনলোড শুরু হচ্ছে..."
+                    progressStatusText = "⏳ বিল্ট-ইন অফলাইন ভয়েস মডেল প্রস্তুত হচ্ছে..."
                 )
             }
             try {
-                ttsEngine.ensureModelFilesDownloaded { pct, statusMessage ->
+                ttsEngine.ensureModelFilesReady { pct, statusMessage ->
                     _uiState.update { state ->
                         state.copy(
                             progressPercent = pct.coerceIn(0, 100),
@@ -335,7 +339,7 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
                         progressPercent = 100,
                         progressStatusText = "",
                         modelStatus = ttsEngine.queryModelStatus(),
-                        toastBannerMessage = "✅ অফলাইন ভয়েস মডেল (model_fullmeta.onnx) সফলভাবে সংরক্ষিত হয়েছে!"
+                        toastBannerMessage = "✅ বিল্ট-ইন অফলাইন ভয়েস মডেল (model_fullmeta.onnx) সম্পূর্ণ প্রস্তুত!"
                     )
                 }
             } catch (t: Throwable) {
@@ -346,12 +350,40 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
                         progressStatusText = "",
                         modelStatus = ttsEngine.queryModelStatus(),
                         noticeDialog = NoticeDialogState(
-                            title = "⚠️ ডাউনলোড ত্রুটি",
-                            message = t.message ?: "মডেল ডাউনলোড ব্যর্থ হয়েছে। ইন্টারনেট সংযোগ পরীক্ষা করুন।"
+                            title = "⚠️ মডেল ত্রুটি",
+                            message = t.message ?: "অফলাইন মডেল প্রস্তুত করতে সমস্যা হয়েছে।"
                         )
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Tests the Android System-wide TextToSpeechService (ReporterHasanTtsService)
+     * directly via Android's TextToSpeech API so the user can verify phone TTS integration.
+     */
+    fun testSystemTtsEngine() {
+        showBanner("🔊 সিস্টেম TTS ইঞ্জিন (Reporter Hasan TTS) টেস্ট করা হচ্ছে...")
+        runCatching {
+            systemTtsTester?.shutdown()
+            systemTtsTester = TextToSpeech(
+                appContext,
+                { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        systemTtsTester?.language = Locale("bn", "BD")
+                        systemTtsTester?.speak(
+                            "রিপোর্টার হাসান অফলাইন সিস্টেম টিটিএস ইঞ্জিন এখন আপনার ফোনের সাথে সংযুক্ত।",
+                            TextToSpeech.QUEUE_FLUSH,
+                            Bundle(),
+                            "system_tts_test_utterance"
+                        )
+                    } else {
+                        showBanner("⚠️ সিস্টেম TTS ইনিশিয়ালাইজ করা যায়নি।")
+                    }
+                },
+                appContext.packageName
+            )
         }
     }
 
@@ -610,6 +642,6 @@ class TtsStudioViewModel(application: Application) : AndroidViewModel(applicatio
     override fun onCleared() {
         super.onCleared()
         stopPlayback()
-        ttsEngine.release()
+        runCatching { systemTtsTester?.shutdown() }
     }
 }

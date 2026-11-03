@@ -596,7 +596,7 @@ fun HomeStudioScreen(
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "উপরে বাংলা নিউজ বা স্ক্রিপ্ট লিখে 'GENERATE VOICE 🔊' বাটনে ট্যাপ করুন। প্রথমবার রান করলে অফলাইন ভয়েস মডেল (model_fullmeta.onnx) স্বয়ংক্রিয়ভাবে ডাউনলোড হবে।",
+                            text = "উপরে বাংলা নিউজ বা স্ক্রিপ্ট লিখে 'GENERATE VOICE 🔊' বাটনে ট্যাপ করুন। ভয়েস মডেলটি অ্যাপের ভেতরেই যুক্ত করা আছে (১০০% অফলাইন, ইন্টারনেট লাগবে না)।",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MutedSlateSubtext
                         )
