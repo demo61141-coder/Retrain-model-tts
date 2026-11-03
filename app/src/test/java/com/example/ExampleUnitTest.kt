@@ -73,4 +73,24 @@ class ExampleUnitTest {
             tempWav.delete()
         }
     }
+
+    @Test
+    fun `preparePieceForJoining strips only exact leading zeros and applies 20ms raised cosine fade`() {
+        // 100 exact 0.0f samples + 1000 non-zero samples (including quiet 0.001f samples)
+        val raw = FloatArray(1100) { idx ->
+            when {
+                idx < 100 -> 0.0f
+                idx < 150 -> 0.001f // quiet speech must NOT be stripped
+                else -> 0.5f
+            }
+        }
+        val processed = WavFileWriter.preparePieceForJoining(raw, 22050)
+        // Exactly 100 leading 0.0f stripped -> 1000 samples remain
+        assertEquals(1000, processed.size)
+        // Starts at 0.0f (fade-in start) and ends at 0.0f (fade-out end)
+        assertEquals(0.0f, processed.first(), 1e-6f)
+        assertEquals(0.0f, processed.last(), 1e-6f)
+        // Middle untouched (index 500 is outside the 441-sample 20ms fades)
+        assertEquals(0.5f, processed[500], 1e-6f)
+    }
 }

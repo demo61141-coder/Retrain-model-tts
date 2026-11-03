@@ -539,9 +539,12 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
 
                 val rawSamples = generated.samples
                 if (rawSamples.isNotEmpty()) {
-                    val processedSamples = WavFileWriter.applyPitchIfNeeded(rawSamples, pitch)
-                    chunkBuffers.add(processedSamples)
-                    totalSamples += processedSamples.size
+                    val pitchedSamples = WavFileWriter.applyPitchIfNeeded(rawSamples, pitch)
+                    val processedSamples = WavFileWriter.preparePieceForJoining(pitchedSamples, sampleRate)
+                    if (processedSamples.isNotEmpty()) {
+                        chunkBuffers.add(processedSamples)
+                        totalSamples += processedSamples.size
+                    }
                 }
 
                 if (index < chunks.lastIndex && chunk.pauseSeconds > 0f) {
@@ -638,7 +641,8 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
 
                 if (isStopped()) break
 
-                val samples = WavFileWriter.applyPitchIfNeeded(generated.samples, pitch)
+                val pitchedSamples = WavFileWriter.applyPitchIfNeeded(generated.samples, pitch)
+                val samples = WavFileWriter.preparePieceForJoining(pitchedSamples, sampleRate)
                 if (samples.isNotEmpty()) {
                     val pcmBytes = floatSamplesToPcm16Bytes(samples)
                     if (!onPcmBytesReady(pcmBytes)) break

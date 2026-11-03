@@ -133,4 +133,46 @@ object WavFileWriter {
         }
         return output
     }
+
+    /**
+     * Smooths each synthesized piece right before joining:
+     * 1. Strips ONLY leading exact 0.0f samples from the start of the piece (keeps all non-zero low-volume speech).
+     * 2. Applies a 20ms raised-cosine fade-in (0 -> 1) at the start and a 20ms raised-cosine fade-out (1 -> 0)
+     *    at the end (clamped to half the piece length if the piece is very short so the two fades never overlap).
+     */
+    fun preparePieceForJoining(
+        samples: FloatArray,
+        sampleRate: Int = SAMPLE_RATE
+    ): FloatArray {
+        if (samples.isEmpty()) return samples
+
+        var firstNonZero = 0
+        while (firstNonZero < samples.size && samples[firstNonZero] == 0.0f) {
+            firstNonZero++
+        }
+        if (firstNonZero >= samples.size) {
+            return FloatArray(0)
+        }
+
+        val result = samples.copyOfRange(firstNonZero, samples.size)
+        val targetFadeSamples = (sampleRate * 0.020).roundToInt().coerceAtLeast(1)
+        val fadeLen = min(targetFadeSamples, result.size / 2)
+
+        if (fadeLen > 0) {
+            val denom = max(1, fadeLen - 1).toDouble()
+            for (i in 0 until fadeLen) {
+                val progress = if (fadeLen > 1) i.toDouble() / denom else 0.0
+                // Raised-cosine fade-in: 0.0 -> 1.0
+                val fadeInGain = (0.5 * (1.0 - kotlin.math.cos(Math.PI * progress))).toFloat()
+                result[i] = result[i] * fadeInGain
+
+                // Raised-cosine fade-out: 1.0 -> 0.0
+                val fadeOutGain = (0.5 * (1.0 + kotlin.math.cos(Math.PI * progress))).toFloat()
+                val outIdx = result.size - fadeLen + i
+                result[outIdx] = result[outIdx] * fadeOutGain
+            }
+        }
+
+        return result
+    }
 }

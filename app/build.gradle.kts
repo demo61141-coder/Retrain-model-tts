@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.net.URI
 
 plugins {
   alias(libs.plugins.android.application)
@@ -6,6 +7,28 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
+}
+
+// Self-healing binary check so container restarts or fresh builds always have the AAR & model assets
+run {
+  val aarFile = file("libs/sherpa-onnx-2.0.1.aar")
+  if (!aarFile.exists() || aarFile.length() < 10_000_000L) {
+    aarFile.parentFile.mkdirs()
+    URI("https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.1/sherpa-onnx-2.0.1.aar")
+      .toURL().openStream().use { input -> aarFile.outputStream().use { output -> input.copyTo(output) } }
+  }
+  val tokensAsset = file("src/main/assets/tokens_sherpa.txt")
+  if (!tokensAsset.exists() || tokensAsset.length() != 567L) {
+    tokensAsset.parentFile.mkdirs()
+    URI("https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/tokens_sherpa.txt")
+      .toURL().openStream().use { input -> tokensAsset.outputStream().use { output -> input.copyTo(output) } }
+  }
+  val modelAsset = file("src/main/assets/model_fullmeta.onnx")
+  if (!modelAsset.exists() || modelAsset.length() != 114188118L) {
+    modelAsset.parentFile.mkdirs()
+    URI("https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/model_fullmeta.onnx")
+      .toURL().openStream().use { input -> modelAsset.outputStream().use { output -> input.copyTo(output) } }
+  }
 }
 
 android {
