@@ -220,6 +220,51 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 }
             }
         }
+        ensureModelMetadataPatched(modelFile)
+    }
+
+    /**
+     * Ensures `use_eos_bos` in `model_fullmeta.onnx` metadata is set to `'0'` (matching Coqui training
+     * `"enable_eos_bos_chars": false`) without changing the 114,188,118 byte file size.
+     * If an older unpatched file with `use_eos_bos=1` is found in `filesDir`, patches the single byte in-place
+     * and resets `offlineTts` so the engine reloads cleanly.
+     */
+    private fun ensureModelMetadataPatched(modelFile: File) {
+        if (!modelFile.exists() || modelFile.length() != EXPECTED_MODEL_BYTES) return
+        runCatching {
+            RandomAccessFile(modelFile, "rw").use { raf ->
+                val tailLen = 256
+                val startPos = max(0L, raf.length() - tailLen)
+                raf.seek(startPos)
+                val tailBytes = ByteArray((raf.length() - startPos).toInt())
+                raf.readFully(tailBytes)
+
+                // Pattern: "use_eos_bos" + 0x12 + 0x01 + '1' (0x31)
+                val pattern = byteArrayOf(
+                    'u'.code.toByte(), 's'.code.toByte(), 'e'.code.toByte(), '_'.code.toByte(),
+                    'e'.code.toByte(), 'o'.code.toByte(), 's'.code.toByte(), '_'.code.toByte(),
+                    'b'.code.toByte(), 'o'.code.toByte(), 's'.code.toByte(),
+                    0x12.toByte(), 0x01.toByte(), '1'.code.toByte()
+                )
+                for (i in 0..(tailBytes.size - pattern.size)) {
+                    var matched = true
+                    for (j in pattern.indices) {
+                        if (tailBytes[i + j] != pattern[j]) {
+                            matched = false
+                            break
+                        }
+                    }
+                    if (matched) {
+                        val valueOffset = startPos + i + pattern.size - 1
+                        raf.seek(valueOffset)
+                        raf.writeByte('0'.code)
+                        offlineTts?.release()
+                        offlineTts = null
+                        break
+                    }
+                }
+            }
+        }
     }
 
     private fun copyAssetToFile(
@@ -398,8 +443,6 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
      * Never called during app startup.
      */
     private fun getOrLoadTtsUnlocked(): OfflineTts {
-        offlineTts?.let { return it }
-
         val modelFile = getModelFile()
         val tokensFile = getTokensFile()
 
@@ -413,6 +456,9 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 "টোকেন ফাইল (tokens_sherpa.txt) পাওয়া যায়নি। অনুগ্রহ করে আবার চেষ্টা করুন।"
             )
         }
+
+        ensureModelMetadataPatched(modelFile)
+        offlineTts?.let { return it }
 
         try {
             val vitsConfig = OfflineTtsVitsModelConfig(
@@ -481,10 +527,11 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 )
             }
 
-            val chunks = BengaliTextChunker.chunkText(trimmed)
-            if (chunks.isEmpty()) {
+            val rawChunks = BengaliTextChunker.chunkText(trimmed)
+            if (rawChunks.isEmpty()) {
                 throw BengaliTtsException("টেক্সট প্রসেস করা যায়নি। অনুগ্রহ করে বৈধ বাংলা বাক্য লিখুন।")
             }
+            val chunks = BengaliTextChunker.mergeShortSubClausesForSynthesis(rawChunks)
 
             // Step 1: Ensure model_fullmeta.onnx and tokens_sherpa.txt exist in filesDir (extracted from built-in assets)
             val modelFile = getModelFile()
@@ -524,9 +571,10 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                     "⏳ Generating offline audio... (অংশ ${index + 1}/${chunks.size})"
                 )
 
+                val synthText = BengaliTextChunker.preparePieceForSynthesis(chunk.text)
                 val generated = try {
                     tts.generate(
-                        text = chunk.text,
+                        text = synthText,
                         sid = 0,
                         speed = safeSpeed
                     )
@@ -597,7 +645,7 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 fileName = fileName,
                 durationSeconds = durationSeconds,
                 wordCount = wordCount,
-                chunkCount = chunks.size,
+                chunkCount = rawChunks.size,
                 fileSizeBytes = outputFile.length(),
                 waveformPeaks = waveformPeaks
             )
@@ -625,15 +673,17 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 .getOrDefault(VITS_SAMPLE_RATE)
                 .let { if (it > 0) it else VITS_SAMPLE_RATE }
 
-            val chunks = BengaliTextChunker.chunkText(trimmed)
+            val rawChunks = BengaliTextChunker.chunkText(trimmed)
+            val chunks = BengaliTextChunker.mergeShortSubClausesForSynthesis(rawChunks)
             val safeSpeed = speed.coerceIn(0.5f, 2.0f)
 
             for ((index, chunk) in chunks.withIndex()) {
                 if (isStopped()) break
 
+                val synthText = BengaliTextChunker.preparePieceForSynthesis(chunk.text)
                 val generated = runCatching {
                     tts.generate(
-                        text = chunk.text,
+                        text = synthText,
                         sid = 0,
                         speed = safeSpeed
                     )

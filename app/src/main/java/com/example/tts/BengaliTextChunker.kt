@@ -144,4 +144,65 @@ object BengaliTextChunker {
 
         return result
     }
+
+    /**
+     * Merges very short comma/apostrophe sub-clauses (< 25 chars, such as "শুভ সন্ধ্যা,")
+     * with the immediately following clause of the same sentence so VITS receives enough
+     * phonetic context and avoids short-fragment cold-start duration instability.
+     */
+    fun mergeShortSubClausesForSynthesis(chunks: List<TextChunk>): List<TextChunk> {
+        if (chunks.size <= 1) return chunks
+        val merged = mutableListOf<TextChunk>()
+        var i = 0
+        while (i < chunks.size) {
+            val current = chunks[i]
+            val isShortMinorClause =
+                (current.endingMark == ',' || current.endingMark == '\'') &&
+                    current.text.length < 25
+            if (isShortMinorClause && i + 1 < chunks.size) {
+                val next = chunks[i + 1]
+                val combinedText = "${current.text} ${next.text}"
+                if (combinedText.length <= MAX_CHUNK_CHARS) {
+                    merged.add(
+                        TextChunk(
+                            text = combinedText,
+                            pauseSeconds = next.pauseSeconds,
+                            endingMark = next.endingMark
+                        )
+                    )
+                    i += 2
+                    continue
+                }
+            }
+            merged.add(current)
+            i++
+        }
+        return merged
+    }
+
+    private val DIGIT_COMMA_REGEX = Regex("([০-৯0-9]),([০-৯0-9])")
+    private val DIGIT_DECIMAL_REGEX = Regex("([০-৯0-9])\\.([০-৯0-9])")
+
+    /**
+     * Prepares a chunk's text right before passing to Sherpa-ONNX VITS `tts.generate(...)`:
+     * 1. Normalizes numeric commas (e.g. ১২,৫০০ -> ১২৫০০) so `,` inside numbers is not treated as a clause pause.
+     * 2. Normalizes numeric decimals (e.g. ১২.৫ -> ১২ দশমিক ৫) so `.` inside numbers does not stutter.
+     * 3. Strips trailing sentence/clause split marks (। ? ! . , ') so they do not collide with VITS end-of-sequence frames.
+     */
+    fun preparePieceForSynthesis(pieceText: String): String {
+        var cleaned = pieceText.trim()
+        if (cleaned.isEmpty()) return cleaned
+
+        // Repeat digit comma removal in case of multiple commas (e.g. ১,০০,০০০)
+        while (DIGIT_COMMA_REGEX.containsMatchIn(cleaned)) {
+            cleaned = DIGIT_COMMA_REGEX.replace(cleaned, "$1$2")
+        }
+        cleaned = DIGIT_DECIMAL_REGEX.replace(cleaned, "$1 দশমিক $2")
+
+        while (cleaned.isNotEmpty() && (cleaned.last() in SPLIT_MARKS || cleaned.last().isWhitespace())) {
+            cleaned = cleaned.dropLast(1)
+        }
+        return cleaned.trim().ifEmpty { pieceText.trim() }
+    }
 }
+

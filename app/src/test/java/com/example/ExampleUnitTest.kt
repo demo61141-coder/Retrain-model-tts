@@ -93,4 +93,49 @@ class ExampleUnitTest {
         // Middle untouched (index 500 is outside the 441-sample 20ms fades)
         assertEquals(0.5f, processed[500], 1e-6f)
     }
+
+    @Test
+    fun `preparePieceForSynthesis normalizes Bengali numbers and strips trailing split marks`() {
+        val script =
+            "শুভ সন্ধ্যা, রিপোর্টার হাসান নিউজ ডেস্কে আপনাদের স্বাগতম। এই প্রযুক্তিতে ১২,৫০০ টাকার সাশ্রয়ী ডিভাইসেও মাত্র ১২.৫ সেকেন্ডে দীর্ঘ প্রতিবেদন তৈরি করা সম্ভব।"
+        val rawChunks = BengaliTextChunker.chunkText(script)
+        assertEquals(3, rawChunks.size)
+
+        val mergedChunks = BengaliTextChunker.mergeShortSubClausesForSynthesis(rawChunks)
+        assertEquals(2, mergedChunks.size)
+        assertEquals(
+            "শুভ সন্ধ্যা, রিপোর্টার হাসান নিউজ ডেস্কে আপনাদের স্বাগতম",
+            BengaliTextChunker.preparePieceForSynthesis(mergedChunks[0].text)
+        )
+        assertEquals(
+            "এই প্রযুক্তিতে ১২৫০০ টাকার সাশ্রয়ী ডিভাইসেও মাত্র ১২ দশমিক ৫ সেকেন্ডে দীর্ঘ প্রতিবেদন তৈরি করা সম্ভব",
+            BengaliTextChunker.preparePieceForSynthesis(mergedChunks[1].text)
+        )
+    }
+
+    @Test
+    fun `preparePieceForJoining trims cold start murmur and isolated pre-onset pop`() {
+        val sr = 22050
+        val win = 331 // 15ms at 22050 Hz
+        // 20 windows (300ms):
+        // windows 0..1: isolated cold-start pop (0.14f)
+        // windows 2..7: 90ms silence gap (0.01f)
+        // windows 8..17: real speech syllable (0.45f)
+        // windows 18..19: post-speech murmur (0.01f)
+        val raw = FloatArray(20 * win) { idx ->
+            val w = idx / win
+            when (w) {
+                0, 1 -> 0.14f
+                in 2..7 -> 0.01f
+                in 8..17 -> 0.45f
+                else -> 0.01f
+            }
+        }
+        val cleaned = WavFileWriter.preparePieceForJoining(raw, sr)
+        // Should start at window 6 (2 windows = 30ms before window 8) and keep through end -> 14 windows
+        assertEquals(14 * win, cleaned.size)
+        assertEquals(0.0f, cleaned.first(), 1e-6f)
+        assertEquals(0.0f, cleaned.last(), 1e-6f)
+    }
 }
+

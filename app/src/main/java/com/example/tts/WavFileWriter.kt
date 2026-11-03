@@ -136,8 +136,11 @@ object WavFileWriter {
 
     /**
      * Smooths each synthesized piece right before joining:
-     * 1. Strips ONLY leading exact 0.0f samples from the start of the piece (keeps all non-zero low-volume speech).
-     * 2. Applies a 20ms raised-cosine fade-in (0 -> 1) at the start and a 20ms raised-cosine fade-out (1 -> 0)
+     * 1. Strips leading and trailing exact 0.0f samples.
+     * 2. For real speech segments (>= 180ms), trims VITS cold-start pre-onset murmur/pops
+     *    (stepping back 30ms before the first sustained syllable vowel so initial consonants
+     *    like শ/স/হ are 100% preserved) and trims post-speech tail pops (keeping 60ms of natural decay).
+     * 3. Applies a 20ms raised-cosine fade-in (0 -> 1) at the start and a 20ms raised-cosine fade-out (1 -> 0)
      *    at the end (clamped to half the piece length if the piece is very short so the two fades never overlap).
      */
     fun preparePieceForJoining(
@@ -154,7 +157,99 @@ object WavFileWriter {
             return FloatArray(0)
         }
 
-        val result = samples.copyOfRange(firstNonZero, samples.size)
+        var lastNonZero = samples.lastIndex
+        while (lastNonZero > firstNonZero && samples[lastNonZero] == 0.0f) {
+            lastNonZero--
+        }
+
+        var startIdx = firstNonZero
+        var endIdx = lastNonZero + 1
+        val nonZeroLen = endIdx - startIdx
+
+        val winSize = (sampleRate * 0.015).roundToInt().coerceAtLeast(1) // 15ms window
+        val numWins = nonZeroLen / winSize
+
+        if (numWins >= 12) {
+            val rms = FloatArray(numWins)
+            var maxRms = 0f
+            for (w in 0 until numWins) {
+                val base = startIdx + w * winSize
+                var sumSq = 0.0
+                for (i in 0 until winSize) {
+                    val v = samples[base + i].toDouble()
+                    sumSq += v * v
+                }
+                val r = kotlin.math.sqrt(sumSq / winSize.toDouble()).toFloat()
+                rms[w] = r
+                if (r > maxRms) maxRms = r
+            }
+
+            if (maxRms >= 0.08f) {
+                val onsetThresh = max(0.075f, maxRms * 0.22f)
+                var firstWin = 0
+                for (w in 0 until numWins) {
+                    val nextR = if (w + 1 < numWins) rms[w + 1] else rms[w]
+                    if (rms[w] >= onsetThresh && nextR >= onsetThresh * 0.85f) {
+                        firstWin = w
+                        break
+                    }
+                }
+
+                // Check if this early onset is an isolated cold-start pop/murmur followed by >= 60ms (4 windows)
+                // of near-silence before the first strong syllable (rms >= 0.34 * maxRms)
+                val strongThresh = max(0.11f, maxRms * 0.34f)
+                val silenceThresh = max(0.045f, maxRms * 0.10f)
+                val searchLimit = min(numWins - 2, firstWin + 45)
+                var gapStart = -1
+                var silentCount = 0
+                for (w in firstWin until searchLimit) {
+                    if (silentCount == 0 && rms[w] >= strongThresh && rms[w + 1] >= strongThresh * 0.85f) {
+                        // Reached strong sustained speech before any silence gap
+                        break
+                    }
+                    if (rms[w] < silenceThresh) {
+                        if (silentCount == 0) gapStart = w
+                        silentCount++
+                    } else if (silentCount >= 4) {
+                        // Found speech after a >= 60ms silence gap; verify a strong syllable follows
+                        var hasStrongAfter = false
+                        val checkEnd = min(numWins, w + 16)
+                        for (k in w until checkEnd) {
+                            if (rms[k] >= onsetThresh) {
+                                hasStrongAfter = true
+                                break
+                            }
+                        }
+                        if (hasStrongAfter && gapStart > firstWin) {
+                            firstWin = w
+                        }
+                        break
+                    } else {
+                        silentCount = 0
+                    }
+                }
+
+                // Step back 2 windows (30ms) to preserve initial consonant attack
+                val trimStartWin = max(0, firstWin - 2)
+                startIdx = firstNonZero + trimStartWin * winSize
+
+                // Trim trailing post-silence <EOS>/<BLNK> pops from the end
+                val tailThresh = max(0.040f, maxRms * 0.15f)
+                var lastWin = numWins - 1
+                for (w in (numWins - 1) downTo firstWin) {
+                    val prevR = if (w > 0) rms[w - 1] else rms[w]
+                    if (rms[w] >= tailThresh && prevR >= tailThresh * 0.80f) {
+                        lastWin = w
+                        break
+                    }
+                }
+                // Keep 4 windows (60ms) of natural syllable release
+                val trimEndSample = firstNonZero + (lastWin + 4) * winSize
+                endIdx = min(endIdx, max(startIdx + winSize, trimEndSample))
+            }
+        }
+
+        val result = samples.copyOfRange(startIdx, endIdx)
         val targetFadeSamples = (sampleRate * 0.020).roundToInt().coerceAtLeast(1)
         val fadeLen = min(targetFadeSamples, result.size / 2)
 
@@ -176,3 +271,4 @@ object WavFileWriter {
         return result
     }
 }
+
