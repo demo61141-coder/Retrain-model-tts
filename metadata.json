@@ -1,0 +1,6 @@
+{
+  "name": "Reporter Hasan TTS",
+  "description": "Offline Bengali News Text-to-Speech Studio powered by Sherpa-ONNX VITS retrain model with local database history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

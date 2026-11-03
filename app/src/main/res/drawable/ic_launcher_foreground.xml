@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Glow ring -->
+    <path
+        android:fillColor="#334F46E5"
+        android:pathData="M54,54m-32,0a32,32 0,1 1,64 0a32,32 0,1 1,-64 0" />
+    <!-- Soundwaves Left & Right -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M28,46h3v16h-3zM34,40h3v28h-3zM71,40h3v28h-3zM77,46h3v16h-3z" />
+    <!-- Studio Microphone Capsule -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M54,28c-5.5,0 -10,4.5 -10,10v16c0,5.5 4.5,10 10,10s10,-4.5 10,-10V38c0,-5.5 -4.5,-10 -10,-10z" />
+    <!-- Microphone Cradle & Stand -->
+    <path
+        android:fillColor="#F8FAFC"
+        android:pathData="M70,52h-4c0,6.6 -5.4,12 -12,12s-12,-5.4 -12,-12h-4c0,8.1 6,14.7 14,15.8V76h-8v4h20v-4h-8v-8.2C64,66.7 70,60.1 70,52z" />
+</vector>

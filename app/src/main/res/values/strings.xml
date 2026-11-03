@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Reporter Hasan TTS</string>
+    <string name="app_subtitle">BanglaTTS v1.9.4-fixed • অফলাইন নিউজ স্টুডিও</string>
+    <string name="settings_button">Settings</string>
+    <string name="template_label">Select Template:</string>
+    <string name="script_placeholder">এখানে আপনার নিউজ বা স্ক্রিপ্ট পেস্ট করুন...\n(বাংলা অথবা ইংরেজি টেক্সট)</string>
+    <string name="voice_settings_title">Voice Settings:</string>
+    <string name="speed_label">Speed:</string>
+    <string name="pitch_label">Pitch:</string>
+    <string name="generate_voice_button">GENERATE VOICE 🔊</string>
+    <string name="generating_status">⏳ Generating offline audio... (Please wait)</string>
+    <string name="recent_history_title">Recent History:</string>
+    <string name="nav_home">Home</string>
+    <string name="nav_history">History</string>
+    <string name="nav_tts_setup">TTS Setup</string>
+    <string name="audio_player_title">Audio Player</string>
+    <string name="system_tts_setup_title">System TTS Setup</string>
+    <string name="save_to_device">Save to Device</string>
+    <string name="share_audio">Share Audio</string>
+    <string name="open_phone_tts_settings">OPEN PHONE TTS SETTINGS</string>
+    <string name="notice_title">Notice</string>
+    <string name="notice_word_limit_message">দয়া করে ৫০০০ শব্দের কম টেক্সট একসাথে ইনপুট দিন, যাতে অফলাইন প্রসেসিংয়ে কোনো ক্র্যাশ না করে।</string>
+    <string name="ok_got_it">OK Got It</string>
+</resources>
