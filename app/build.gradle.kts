@@ -18,15 +18,15 @@ run {
       .toURL().openStream().use { input -> aarFile.outputStream().use { output -> input.copyTo(output) } }
   }
   val tokensAsset = file("src/main/assets/tokens_sherpa.txt")
-  if (!tokensAsset.exists() || tokensAsset.length() != 567L) {
+  if (!tokensAsset.exists() || tokensAsset.length() != 603L) {
     tokensAsset.parentFile.mkdirs()
-    URI("https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/tokens_sherpa.txt")
+    URI("https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/tokens_sherpa.txt")
       .toURL().openStream().use { input -> tokensAsset.outputStream().use { output -> input.copyTo(output) } }
   }
   val modelAsset = file("src/main/assets/model_fullmeta.onnx")
-  if (!modelAsset.exists() || modelAsset.length() != 114188118L) {
+  if (!modelAsset.exists() || modelAsset.length() != 114192739L) {
     modelAsset.parentFile.mkdirs()
-    URI("https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/model_fullmeta.onnx")
+    URI("https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/model_fullmeta.onnx")
       .toURL().openStream().use { input -> modelAsset.outputStream().use { output -> input.copyTo(output) } }
   }
 }
@@ -39,8 +39,8 @@ android {
     applicationId = "com.aistudio.banglatts.rhnews"
     minSdk = 24
     targetSdk = 36
-    versionCode = 194
-    versionName = "1.9.4-fixed"
+    versionCode = 195
+    versionName = "1.9.5-merged"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
