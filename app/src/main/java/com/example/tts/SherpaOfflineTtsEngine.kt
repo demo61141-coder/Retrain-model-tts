@@ -51,17 +51,18 @@ class BengaliTtsException(override val message: String, cause: Throwable? = null
 class SherpaOfflineTtsEngine(private val appContext: Context) {
 
     companion object {
-        // Exact FIXED retrain model URL & byte size (v1.9.4-fixed)
+        // MERGED model URL & byte size (v1.9.5-merged): 50/50 average of
+        // news-v2 97ep + combined, 97ep tokenizer (92 tokens).
         const val MODEL_URL =
-            "https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/model_fullmeta.onnx"
+            "https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/model_fullmeta.onnx"
         const val MODEL_FILENAME = "model_fullmeta.onnx"
-        const val EXPECTED_MODEL_BYTES = 114188118L
+        const val EXPECTED_MODEL_BYTES = 114192739L
 
-        // Exact Sherpa tokens URL & byte size
+        // Merged-model Sherpa tokens URL & byte size (97ep tokens, 603 B)
         const val TOKENS_URL =
-            "https://huggingface.co/demoqqq/banglatts-eleven-new-retrain/resolve/main/tokens_sherpa.txt"
+            "https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/tokens_sherpa.txt"
         const val TOKENS_FILENAME = "tokens_sherpa.txt"
-        const val EXPECTED_TOKENS_BYTES = 567L
+        const val EXPECTED_TOKENS_BYTES = 603L
 
         // Exact VITS settings that produced the approved samples
         const val VITS_NOISE_SCALE = 0.667f
@@ -142,7 +143,7 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
     }
 
     /**
-     * Ensures tokens_sherpa.txt (567 bytes) and model_fullmeta.onnx (114,188,118 bytes)
+     * Ensures tokens_sherpa.txt (603 bytes) and model_fullmeta.onnx (114,192,739 bytes)
      * are ready in filesDir:
      * 1. First copies directly from built-in APK assets (100% offline, no internet needed!).
      * 2. Falls back to HTTP Range resume download only if assets are missing.
@@ -168,7 +169,7 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                     expectedBytes = EXPECTED_TOKENS_BYTES
                 ) { _, _ -> }
             } else {
-                onProgress(1, "⏳ টোকেন ফাইল ডাউনলোড হচ্ছে (tokens_sherpa.txt - 567 bytes)...")
+                onProgress(1, "⏳ টোকেন ফাইল ডাউনলোড হচ্ছে (tokens_sherpa.txt - 603 bytes)...")
                 downloadWithRangeResume(
                     url = TOKENS_URL,
                     targetFile = tokensFile,
@@ -230,6 +231,13 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
      * and resets `offlineTts` so the engine reloads cleanly.
      */
     private fun ensureModelMetadataPatched(modelFile: File) {
+        // MERGED model (2026-11-05): DISABLED. The merged fullmeta ONNX already
+        // carries correct metadata (use_eos_bos=1), proven by the CPU listening
+        // tests that produced the user-approved merged audio. The old retrain
+        // patch below flipped use_eos_bos 1 -> 0 in the filesDir copy, which
+        // would change proven synthesis behaviour for the merged model, so it
+        // must not run here. The bundled asset itself is never modified.
+        return
         if (!modelFile.exists() || modelFile.length() != EXPECTED_MODEL_BYTES) return
         runCatching {
             RandomAccessFile(modelFile, "rw").use { raf ->
