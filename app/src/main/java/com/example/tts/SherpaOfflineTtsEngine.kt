@@ -484,7 +484,7 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
                 vits = vitsConfig,
                 numThreads = CPU_THREADS,
                 debug = false,
-                provider = "cpu"
+                provider = "nnapi"
             )
 
             val config = OfflineTtsConfig(
