@@ -39,8 +39,8 @@ android {
     applicationId = "com.aistudio.banglatts.rhnews"
     minSdk = 24
     targetSdk = 36
-    versionCode = 195
-    versionName = "1.9.5-merged"
+    versionCode = 196
+    versionName = "1.9.6-threads"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
