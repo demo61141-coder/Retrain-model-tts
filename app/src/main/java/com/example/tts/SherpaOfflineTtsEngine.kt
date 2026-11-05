@@ -69,7 +69,7 @@ class SherpaOfflineTtsEngine(private val appContext: Context) {
         const val VITS_NOISE_SCALE_W = 0.8f
         const val VITS_LENGTH_SCALE = 1.0f
         const val VITS_SAMPLE_RATE = 22050
-        const val CPU_THREADS = 2
+        const val CPU_THREADS = 8
 
         private const val MAX_DOWNLOAD_RETRIES = 5
 
